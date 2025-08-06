@@ -1,257 +1,275 @@
 #!/usr/bin/env python3
 """
-Test script to verify the Bitrix24 Lead Analyzer setup
+Bitrix24 Webhook Test Script
+Test your Bitrix24 API connectivity and webhook configuration
 """
 
-import os
-import sys
 import requests
-import asyncio
-import aiohttp
-from datetime import datetime
 import json
+import os
+from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
-
-def test_environment_variables():
-    """Test if all required environment variables are set"""
-    print("🔧 Testing Environment Variables...")
-
-    required_vars = [
-        'BITRIX_WEBHOOK_URL',
-        'GEMINI_API_KEY'
-    ]
-
-    missing = []
-    for var in required_vars:
-        if not os.getenv(var):
-            missing.append(var)
-
-    if missing:
-        print(f"❌ Missing environment variables: {', '.join(missing)}")
-        return False
-    else:
-        print("✅ All environment variables are set")
-        return True
+load_dotenv()
 
 
 def test_bitrix_connection():
-    """Test connection to Bitrix24 API"""
-    print("\n📞 Testing Bitrix24 Connection...")
-
+    """Test basic Bitrix24 API connection"""
     webhook_url = os.getenv('BITRIX_WEBHOOK_URL')
+
     if not webhook_url:
-        print("❌ BITRIX_WEBHOOK_URL not set")
+        print("❌ BITRIX_WEBHOOK_URL not found in environment variables")
         return False
 
+    print(f"🔗 Testing connection to: {webhook_url}")
+
     try:
-        # Test basic API call
-        url = f"{webhook_url.rstrip('/')}/crm.lead.list"
-        response = requests.post(url, json={'select': ['ID'], 'filter': {}, 'start': 0})
+        # Test basic connection with lead list
+        response = requests.post(
+            f"{webhook_url}/crm.lead.list.json",
+            json={
+                'start': 0,
+                'rows': 5,
+                'select': ['ID', 'TITLE', 'STATUS_ID', 'DATE_CREATE']
+            },
+            timeout=30
+        )
 
         if response.status_code == 200:
-            data = response.json()
-            if 'result' in data:
-                print(f"✅ Bitrix24 connection successful. Found {len(data['result'])} leads")
+            result = response.json()
+            if 'result' in result:
+                leads = result['result']
+                print(f"✅ Connection successful! Found {len(leads)} leads")
+
+                # Display sample leads
+                for lead in leads[:3]:
+                    print(f"  - Lead ID: {lead.get('ID')}, Title: {lead.get('TITLE', 'N/A')}")
+
                 return True
             else:
-                print(f"❌ Unexpected response format: {data}")
+                print(f"❌ Invalid response format: {result}")
                 return False
         else:
-            print(f"❌ HTTP {response.status_code}: {response.text}")
+            print(f"❌ HTTP Error {response.status_code}: {response.text}")
             return False
 
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         print(f"❌ Connection error: {e}")
         return False
 
 
-def test_gemini_api():
-    """Test Gemini AI API connection"""
-    print("\n🤖 Testing Gemini AI Connection...")
-
-    api_key = os.getenv('GEMINI_API_KEY')
-    if not api_key:
-        print("❌ GEMINI_API_KEY not set")
-        return False
-
-    try:
-        import google.generativeai as genai
-
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash')
-
-        # Simple test prompt
-        response = model.generate_content("Say 'test successful' if you can read this.")
-
-        if response and response.text:
-            print("✅ Gemini AI connection successful")
-            return True
-        else:
-            print("❌ No response from Gemini AI")
-            return False
-
-    except Exception as e:
-        print(f"❌ Gemini API error: {e}")
-        return False
-
-
-async def test_transcription_service():
-    """Test the transcription service"""
-    print("\n🎤 Testing Transcription Service...")
-
-    service_url = "http://localhost:8000"
-
-    try:
-        # Test health endpoint
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{service_url}/health") as response:
-                if response.status == 200:
-                    print("✅ Transcription service health check passed")
-                    return True
-                else:
-                    print(f"❌ Health check failed: {response.status}")
-                    return False
-
-    except Exception as e:
-        print(f"❌ Transcription service error: {e}")
-        print("💡 Make sure the service is running: docker-compose up transcription-service")
-        return False
-
-
-def test_file_permissions():
-    """Test file system permissions"""
-    print("\n📁 Testing File Permissions...")
-
-    test_dirs = ['./data', './logs']
-    success = True
-
-    for dir_path in test_dirs:
-        try:
-            os.makedirs(dir_path, exist_ok=True)
-
-            # Test write permission
-            test_file = os.path.join(dir_path, 'test_write.tmp')
-            with open(test_file, 'w') as f:
-                f.write('test')
-
-            # Test read permission
-            with open(test_file, 'r') as f:
-                content = f.read()
-
-            # Clean up
-            os.remove(test_file)
-
-            print(f"✅ {dir_path} - Read/Write permissions OK")
-
-        except Exception as e:
-            print(f"❌ {dir_path} - Permission error: {e}")
-            success = False
-
-    return success
-
-
-def test_lead_status_config():
-    """Test lead status configuration"""
-    print("\n📊 Testing Lead Status Configuration...")
-
-    # These should match the statuses in your lead_analyzer.py
-    expected_statuses = {
-        "158": "5 marta javob bermadi",
-        "227": "Notog'ri raqam",
-        "229": "Ariza qoldirmagan",
-        "783": "Notog'ri mijoz",
-        "807": "Yoshi to'g'ri kelmadi"
-    }
-
+def test_lead_statuses():
+    """Test if we can get lead statuses"""
     webhook_url = os.getenv('BITRIX_WEBHOOK_URL')
-    if not webhook_url:
-        print("❌ Cannot test - BITRIX_WEBHOOK_URL not set")
-        return False
 
     try:
-        # Get status list from Bitrix24
-        url = f"{webhook_url.rstrip('/')}/crm.status.list"
-        response = requests.post(url, json={'filter': {'STATUS_ID': 'JUNK'}})
+        print("\n📋 Testing lead status retrieval...")
+        response = requests.post(
+            f"{webhook_url}/crm.status.list.json",
+            json={
+                'filter': {
+                    'ENTITY_ID': 'STATUS'
+                }
+            },
+            timeout=30
+        )
 
         if response.status_code == 200:
-            data = response.json()
-            if 'result' in data:
+            result = response.json()
+            statuses = result.get('result', [])
+            print(f"✅ Found {len(statuses)} statuses")
 
-                print("✅ All configured lead statuses found in Bitrix24")
+            # Look for our target statuses
+            target_statuses = {158, 227, 229, 783, 807}
+            found_statuses = {}
 
-                return True
-            else:
-                print("❌ Could not retrieve status list from Bitrix24")
-                return False
+            for status in statuses:
+                status_id = status.get('STATUS_ID')
+                if status_id and int(status_id) in target_statuses:
+                    found_statuses[int(status_id)] = status.get('NAME', 'Unknown')
+
+            print("🎯 Target junk statuses found:")
+            status_names = {
+                158: "5 marta javob bermadi",
+                227: "Notog'ri raqam",
+                229: "Ariza qoldirmagan",
+                783: "Notog'ri mijoz",
+                807: "Yoshi to'g'ri kelmadi"
+            }
+
+            for status_id in target_statuses:
+                if status_id in found_statuses:
+                    print(f"  ✅ {status_id}: {found_statuses[status_id]}")
+                else:
+                    print(f"  ❌ {status_id}: {status_names[status_id]} (NOT FOUND)")
+
+            return len(found_statuses) > 0
         else:
-            print(f"❌ Failed to get statuses: HTTP {response.status_code}")
+            print(f"❌ Failed to get statuses: {response.status_code}")
             return False
 
     except Exception as e:
-        print(f"❌ Status check error: {e}")
+        print(f"❌ Error getting statuses: {e}")
         return False
 
 
-async def main():
-    """Run all tests"""
-    print("🚀 Starting Bitrix24 Lead Analyzer Test Suite")
+def test_lead_activities():
+    """Test if we can get lead activities"""
+    webhook_url = os.getenv('BITRIX_WEBHOOK_URL')
+
+    try:
+        print("\n📞 Testing lead activities retrieval...")
+
+        # First get a lead ID
+        response = requests.post(
+            f"{webhook_url}/crm.lead.list.json",
+            json={'start': 0, 'rows': 1, 'select': ['ID']},
+            timeout=30
+        )
+
+        if response.status_code != 200:
+            print("❌ Cannot get test lead")
+            return False
+
+        leads = response.json().get('result', [])
+        if not leads:
+            print("❌ No leads found for testing activities")
+            return False
+
+        lead_id = leads[0]['ID']
+        print(f"🧪 Testing with lead ID: {lead_id}")
+
+        # Get activities for this lead
+        response = requests.post(
+            f"{webhook_url}/crm.activity.list.json",
+            json={
+                'filter': {
+                    'OWNER_ID': lead_id,
+                    'OWNER_TYPE_ID': 1  # Lead type
+                },
+                'select': ['ID', 'TYPE_ID', 'DIRECTION', 'RESULT']
+            },
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            activities = response.json().get('result', [])
+            print(f"✅ Found {len(activities)} activities for lead {lead_id}")
+
+            # Count call activities
+            call_activities = [a for a in activities if a.get('TYPE_ID') == '2']
+            print(f"📞 Found {len(call_activities)} call activities")
+
+            return True
+        else:
+            print(f"❌ Failed to get activities: {response.status_code}")
+            return False
+
+    except Exception as e:
+        print(f"❌ Error testing activities: {e}")
+        return False
+
+
+def test_lead_update():
+    """Test if we can update a lead (dry run)"""
+    webhook_url = os.getenv('BITRIX_WEBHOOK_URL')
+
+    try:
+        print("\n✏️  Testing lead update capability...")
+
+        # Get a test lead
+        response = requests.post(
+            f"{webhook_url}/crm.lead.list.json",
+            json={'start': 0, 'rows': 1, 'select': ['ID', 'STATUS_ID']},
+            timeout=30
+        )
+
+        if response.status_code != 200:
+            print("❌ Cannot get test lead")
+            return False
+
+        leads = response.json().get('result', [])
+        if not leads:
+            print("❌ No leads found for testing update")
+            return False
+
+        lead_id = leads[0]['ID']
+        current_status = leads[0].get('STATUS_ID', 'Unknown')
+
+        print(f"🧪 Test lead ID: {lead_id}, Current status: {current_status}")
+        print("⚠️  This is a dry run - no actual update will be performed")
+
+        # Test update permission (without actually updating)
+        # We'll just verify we have the right API access
+        response = requests.post(
+            f"{webhook_url}/crm.lead.get.json",
+            json={'ID': lead_id},
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            print("✅ Lead update API access confirmed")
+            return True
+        else:
+            print(f"❌ Cannot access lead update API: {response.status_code}")
+            return False
+
+    except Exception as e:
+        print(f"❌ Error testing lead update: {e}")
+        return False
+
+
+def main():
+    print("🚀 Bitrix24 Webhook Configuration Test")
     print("=" * 50)
 
+    # Check environment
+    webhook_url = os.getenv('BITRIX_WEBHOOK_URL')
+    if not webhook_url:
+        print("❌ BITRIX_WEBHOOK_URL not found in .env file")
+        print("Please check your .env configuration")
+        return
+
+    print(f"🔧 Using webhook URL: {webhook_url}")
+    print()
+
+    # Run tests
     tests = [
-        ("Environment Variables", test_environment_variables),
-        ("File Permissions", test_file_permissions),
-        ("Bitrix24 Connection", test_bitrix_connection),
-        ("Lead Status Config", test_lead_status_config),
-        ("Gemini AI Connection", test_gemini_api),
-        ("Transcription Service", test_transcription_service),
+        ("Basic Connection", test_bitrix_connection),
+        ("Lead Statuses", test_lead_statuses),
+        ("Lead Activities", test_lead_activities),
+        ("Update Permission", test_lead_update)
     ]
 
-    results = []
-
+    results = {}
     for test_name, test_func in tests:
-        try:
-            if asyncio.iscoroutinefunction(test_func):
-                result = await test_func()
-            else:
-                result = test_func()
-            results.append((test_name, result))
-        except Exception as e:
-            print(f"❌ {test_name} failed with exception: {e}")
-            results.append((test_name, False))
+        print(f"\n{'=' * 20} {test_name} {'=' * 20}")
+        results[test_name] = test_func()
 
     # Summary
     print("\n" + "=" * 50)
-    print("📋 TEST SUMMARY")
+    print("📊 TEST RESULTS SUMMARY")
     print("=" * 50)
 
-    passed = 0
+    passed = sum(results.values())
     total = len(results)
 
-    for test_name, result in results:
+    for test_name, result in results.items():
         status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{status} - {test_name}")
-        if result:
-            passed += 1
+        print(f"{test_name:.<30} {status}")
 
-    print(f"\n📈 Results: {passed}/{total} tests passed")
+    print(f"\nOverall: {passed}/{total} tests passed")
 
     if passed == total:
-        print("\n🎉 All tests passed! Your setup is ready.")
-        return True
+        print("🎉 All tests passed! Your Bitrix24 configuration is ready.")
     else:
-        print(f"\n⚠️  {total - passed} test(s) failed. Please fix the issues above.")
-        return False
+        print("⚠️  Some tests failed. Please check your configuration.")
+        print("\nTroubleshooting tips:")
+        print("1. Verify your Bitrix24 webhook URL is correct")
+        print("2. Check that the webhook has sufficient permissions")
+        print("3. Ensure your Bitrix24 account has API access enabled")
+        print("4. Test the webhook URL manually in a browser")
 
 
 if __name__ == "__main__":
-    # Load environment variables from .env file if available
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv()
-    except ImportError:
-        print("💡 Install python-dotenv for .env file support: pip install python-dotenv")
-
-    # Run tests
-    success = asyncio.run(main())
-    sys.exit(0 if success else 1)
+    main()

@@ -15,6 +15,10 @@ import asyncio
 import aiohttp
 from dataclasses import dataclass
 import google.generativeai as genai
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
