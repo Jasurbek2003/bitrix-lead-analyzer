@@ -165,6 +165,7 @@ class LeadAnalyzerService(LoggerMixin):
 
             # Analyze the lead
             result = self._analyze_single_lead(lead, dry_run)
+            print("Analysis result:", result)
 
             self.log_lead_action(lead_id, "analyze_complete",
                                  f"Analysis completed: {result.action.value if result.action else 'unknown'}")
@@ -183,18 +184,23 @@ class LeadAnalyzerService(LoggerMixin):
             original_status=lead.status_id,
             original_junk_status=lead.junk_status
         )
+        print("Analyzing lead:", lead.id, "with junk status:", lead.junk_status)
 
         try:
             self.log_lead_action(lead.id, "analyze", f"Analyzing junk status {lead.junk_status}")
 
             # Check if lead has target junk status
-            if not lead.has_target_junk_status:
-                result.set_action(AnalysisAction.SKIP, AnalysisReason.NOT_TARGET_STATUS)
-                result.mark_completed()
-                return result
+            # if not lead.has_target_junk_status:
+            #     result.set_action(AnalysisAction.SKIP, AnalysisReason.NOT_TARGET_STATUS)
+            #     result.mark_completed()
+            #     return result
+
+            print(lead.status_id)
+            print(lead)
+            print(type(lead.junk_status))
 
             # Special handling for status 158 (5 marta javob bermadi)
-            if lead.junk_status == 158:
+            if lead.junk_status == 158 or True:
                 result = self._analyze_unsuccessful_calls(lead, result, dry_run)
             else:
                 # For other statuses, use AI analysis
@@ -208,12 +214,15 @@ class LeadAnalyzerService(LoggerMixin):
             result.set_error(str(e))
             return result
 
+
     def _analyze_unsuccessful_calls(self, lead: Lead, result: LeadAnalysisResult, dry_run: bool) -> LeadAnalysisResult:
         """Analyze lead with status 158 (5 marta javob bermadi)"""
         try:
             # Get lead activities
             activities = self.bitrix_service.get_lead_activities(lead.id)
             lead.activities = activities
+            print("Activities for lead:", lead.id, "->", len(activities), "activities found")
+            print("Lead activities:", activities)
 
             # Count unsuccessful calls
             unsuccessful_calls = lead.unsuccessful_calls_count
@@ -231,7 +240,8 @@ class LeadAnalyzerService(LoggerMixin):
                 result.set_action(
                     AnalysisAction.CHANGE_STATUS,
                     AnalysisReason.INSUFFICIENT_CALLS,
-                    new_status=new_status,
+                    # new_status=new_status,
+                    new_status="JUNK",
                     new_junk_status=None
                 )
 

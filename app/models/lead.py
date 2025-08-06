@@ -95,6 +95,7 @@ class Lead:
             except ValueError:
                 pass
 
+
         # Parse junk status
         junk_status = data.get(junk_status_field)
         if junk_status is not None:
@@ -105,10 +106,6 @@ class Lead:
 
         # Create contact info
         contact = LeadContact(
-            phone=data.get('PHONE', {}).get('0', {}).get('VALUE') if isinstance(data.get('PHONE'), dict) else data.get(
-                'PHONE'),
-            email=data.get('EMAIL', {}).get('0', {}).get('VALUE') if isinstance(data.get('EMAIL'), dict) else data.get(
-                'EMAIL'),
             name=data.get('NAME') or data.get('TITLE')
         )
 

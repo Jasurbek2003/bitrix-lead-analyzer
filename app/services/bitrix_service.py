@@ -68,6 +68,7 @@ class BitrixService(LoggerMixin):
     def get_leads(self, lead_filter: LeadFilter) -> List[Lead]:
         """Get leads based on filter criteria"""
         try:
+            print("Fetching leads with params:", )
             filter_params = lead_filter.to_bitrix_filter(self.lead_config.junk_status_field)
 
             params = {
@@ -79,6 +80,7 @@ class BitrixService(LoggerMixin):
                 'start': 0,
                 'rows': lead_filter.limit
             }
+            print("Fetching leads with params:", params)
 
             self.log_service_action("BitrixService", "get_leads", f"Fetching leads with filter: {filter_params}")
 
@@ -115,7 +117,6 @@ class BitrixService(LoggerMixin):
             }
 
             self.log_lead_action(lead_id, "get_lead", "Fetching lead details")
-
             result = self._make_request("crm.lead.get.json", params)
             lead_data = result.get('result')
 
