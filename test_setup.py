@@ -58,58 +58,99 @@ def test_bitrix_connection():
         return False
 
 
-def test_lead_statuses():
-    """Test if we can get lead statuses"""
+def test_junk_leads_filter():
+    """Test the specific junk leads filtering"""
     webhook_url = os.getenv('BITRIX_WEBHOOK_URL')
 
     try:
-        print("\n📋 Testing lead status retrieval...")
+        print("\n🔍 Testing junk leads filtering...")
+
+        # Test the exact filter parameters used in the application
+        junk_statuses = [158, 227, 229, 783, 807]
+
+        params = {
+            'filter': {
+                'STATUS_ID': "JUNK",
+                'UF_CRM_1751812306933': junk_statuses
+            },
+            'select': ['ID', 'TITLE', 'STATUS_ID', 'UF_CRM_1751812306933', 'DATE_CREATE']
+        }
+
         response = requests.post(
-            f"{webhook_url}/crm.status.list.json",
+            f"{webhook_url}/crm.lead.list.json",
+            json=params,
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            leads = result.get('result', [])
+            print(f"✅ Found {len(leads)} leads with JUNK status and target junk statuses")
+
+            # Display sample leads with their junk status values
+            for lead in leads[:5]:
+                junk_status = lead.get('UF_CRM_1751812306933', 'Not set')
+                print(f"  - Lead ID: {lead.get('ID')}, Junk Status: {junk_status}")
+
+            return True
+        else:
+            print(f"❌ Junk leads filter failed: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+
+    except Exception as e:
+        print(f"❌ Error testing junk leads filter: {e}")
+        return False
+
+
+def test_custom_field_access():
+    """Test access to the custom junk status field"""
+    webhook_url = os.getenv('BITRIX_WEBHOOK_URL')
+
+    try:
+        print("\n📋 Testing custom field UF_CRM_1751812306933 access...")
+
+        # Get any lead to test field access
+        response = requests.post(
+            f"{webhook_url}/crm.lead.list.json",
             json={
-                'filter': {
-                    'ENTITY_ID': 'STATUS'
-                }
+                'start': 0,
+                'rows': 5,
+                'select': ['ID', 'TITLE', 'STATUS_ID', 'UF_CRM_1751812306933']
             },
             timeout=30
         )
 
         if response.status_code == 200:
             result = response.json()
-            statuses = result.get('result', [])
-            print(f"✅ Found {len(statuses)} statuses")
+            leads = result.get('result', [])
 
-            # Look for our target statuses
-            target_statuses = {158, 227, 229, 783, 807}
-            found_statuses = {}
+            if leads:
+                print(f"✅ Custom field access successful")
 
-            for status in statuses:
-                status_id = status.get('STATUS_ID')
-                if status_id and int(status_id) in target_statuses:
-                    found_statuses[int(status_id)] = status.get('NAME', 'Unknown')
+                # Check if any leads have the custom field populated
+                field_found = False
+                for lead in leads:
+                    junk_status = lead.get('UF_CRM_1751812306933')
+                    if junk_status is not None:
+                        print(f"  - Lead {lead.get('ID')}: UF_CRM_1751812306933 = {junk_status}")
+                        field_found = True
 
-            print("🎯 Target junk statuses found:")
-            status_names = {
-                158: "5 marta javob bermadi",
-                227: "Notog'ri raqam",
-                229: "Ariza qoldirmagan",
-                783: "Notog'ri mijoz",
-                807: "Yoshi to'g'ri kelmadi"
-            }
-
-            for status_id in target_statuses:
-                if status_id in found_statuses:
-                    print(f"  ✅ {status_id}: {found_statuses[status_id]}")
+                if field_found:
+                    print("✅ Custom junk status field is populated on some leads")
                 else:
-                    print(f"  ❌ {status_id}: {status_names[status_id]} (NOT FOUND)")
+                    print("⚠️  Custom junk status field is empty on all test leads (this may be normal)")
 
-            return len(found_statuses) > 0
+                return True
+            else:
+                print("⚠️  No leads found to test custom field")
+                return False
         else:
-            print(f"❌ Failed to get statuses: {response.status_code}")
+            print(f"❌ Custom field test failed: {response.status_code}")
             return False
 
     except Exception as e:
-        print(f"❌ Error getting statuses: {e}")
+        print(f"❌ Error testing custom field: {e}")
         return False
 
 
@@ -236,7 +277,8 @@ def main():
     # Run tests
     tests = [
         ("Basic Connection", test_bitrix_connection),
-        ("Lead Statuses", test_lead_statuses),
+        ("Custom Field Access", test_custom_field_access),
+        ("Junk Leads Filter", test_junk_leads_filter),
         ("Lead Activities", test_lead_activities),
         ("Update Permission", test_lead_update)
     ]
