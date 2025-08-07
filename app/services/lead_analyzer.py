@@ -200,7 +200,7 @@ class LeadAnalyzerService(LoggerMixin):
             print(type(lead.junk_status))
 
             # Special handling for status 158 (5 marta javob bermadi)
-            if lead.junk_status == 158 or True:
+            if lead.junk_status == 158:
                 result = self._analyze_unsuccessful_calls(lead, result, dry_run)
             else:
                 # For other statuses, use AI analysis
@@ -223,6 +223,9 @@ class LeadAnalyzerService(LoggerMixin):
             lead.activities = activities
             print("Activities for lead:", lead.id, "->", len(activities), "activities found")
             print("Lead activities:", activities)
+            print(lead.__dict__)
+            for activity in activities:
+                print("Activity:", activity.__dict__)
 
             # Count unsuccessful calls
             unsuccessful_calls = lead.unsuccessful_calls_count

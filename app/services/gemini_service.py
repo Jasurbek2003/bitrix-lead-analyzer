@@ -1,7 +1,7 @@
 """
 Gemini AI service for lead analysis
 """
-
+import logging
 import time
 from typing import Optional, Dict, Any
 import google.generativeai as genai

@@ -1,6 +1,7 @@
 """
 Bitrix24 API service for lead management
 """
+import logging
 
 import requests
 import time
@@ -132,6 +133,17 @@ class BitrixService(LoggerMixin):
             self.log_lead_action(lead_id, "get_lead", f"Error fetching lead: {e}")
             raise
 
+    def get_data_from_voximplant(self, lead_id):
+        if not validate_lead_id(lead_id):
+            raise ValidationError(f"Invalid lead ID: {lead_id}")
+
+        task = {"filter": {"CRM_ENTITY_ID": lead_id}, "sort": "ID", "order": "DESC"}
+        # data = bx24.call(f"voximplant.statistic.get?start={start}", [task])
+        data = self._make_request("voximplant.statistic.get", task, method="GET").get('result', [])
+        print("Fetching data from voximplant.statistic.get")
+        print(data)
+        return data
+
     def get_lead_activities(self, lead_id: str) -> List[LeadActivity]:
         """Get activities for a specific lead"""
         if not validate_lead_id(lead_id):
@@ -143,7 +155,7 @@ class BitrixService(LoggerMixin):
                     'OWNER_ID': lead_id,
                     'OWNER_TYPE_ID': 1  # Lead type
                 },
-                'select': ['ID', 'TYPE_ID', 'DIRECTION', 'RESULT', 'DESCRIPTION', 'DATE', 'FILES']
+                # 'select': ['ID', 'TYPE_ID', 'DIRECTION', 'RESULT', 'DESCRIPTION', 'DATE', 'FILES']
             }
 
             self.log_lead_action(lead_id, "get_activities", "Fetching lead activities")
@@ -166,10 +178,16 @@ class BitrixService(LoggerMixin):
                     audio_file = None
                     files = activity_data.get('FILES', [])
                     if files:
-                        # Look for audio files
                         for file_info in files:
-                            if isinstance(file_info, dict) and file_info.get('type', '').startswith('audio/'):
+                            if isinstance(file_info, dict) and file_info.get('url', '').startswith('https://'):
                                 audio_file = file_info.get('url') or file_info.get('path')
+                                audio_id = file_info.get('id')
+                                print("Fetching audio file", audio_id)
+                                if audio_id:
+                                    audio_file = f"{self.config.webhook_url}crm.file.get?ID={audio_id}"
+                                else:
+                                    self.logger.warning(f"Audio file ID not found in activity {activity_data.get('ID', 'unknown')}")
+                                print("Fetching audio file", audio_file)
                                 break
 
                     activity = LeadActivity(
@@ -353,8 +371,10 @@ class BitrixService(LoggerMixin):
         if not validate_lead_id(lead_id):
             raise ValidationError(f"Invalid lead ID: {lead_id}")
 
-        activities = self.get_lead_activities(lead_id)
+        # activities = self.get_lead_activities(lead_id)
+        activities = self.get_data_from_voximplant(lead_id)
         audio_files = []
+        print(audio_files, "activities:", activities)
 
         for activity in activities:
             if activity.audio_file:
