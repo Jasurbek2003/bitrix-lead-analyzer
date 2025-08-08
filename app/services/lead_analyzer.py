@@ -165,7 +165,6 @@ class LeadAnalyzerService(LoggerMixin):
 
             # Analyze the lead
             result = self._analyze_single_lead(lead, dry_run)
-            print("Analysis result:", result)
 
             self.log_lead_action(lead_id, "analyze_complete",
                                  f"Analysis completed: {result.action.value if result.action else 'unknown'}")
@@ -184,27 +183,32 @@ class LeadAnalyzerService(LoggerMixin):
             original_status=lead.status_id,
             original_junk_status=lead.junk_status
         )
-        print("Analyzing lead:", lead.id, "with junk status:", lead.junk_status)
 
         try:
             self.log_lead_action(lead.id, "analyze", f"Analyzing junk status {lead.junk_status}")
 
             # Check if lead has target junk status
-            # if not lead.has_target_junk_status:
-            #     result.set_action(AnalysisAction.SKIP, AnalysisReason.NOT_TARGET_STATUS)
-            #     result.mark_completed()
-            #     return result
+            if not lead.has_target_junk_status:
+                result.set_action(AnalysisAction.SKIP, AnalysisReason.NOT_TARGET_STATUS)
+                result.mark_completed()
+                return result
 
-            print(lead.status_id)
-            print(lead)
-            print(type(lead.junk_status))
+            # Get call statistics from Voximplant
+            call_stats = self.bitrix_service.get_lead_call_statistics(lead.id)
+
+            # Check if lead has any calls
+            if not call_stats['has_calls']:
+                self.log_lead_action(lead.id, "no_calls", "Lead has no call records - keeping status")
+                result.set_action(AnalysisAction.KEEP_STATUS, AnalysisReason.SUFFICIENT_CALLS)
+                result.mark_completed()
+                return result
 
             # Special handling for status 158 (5 marta javob bermadi)
             if lead.junk_status == 158:
-                result = self._analyze_unsuccessful_calls(lead, result, dry_run)
+                result = self._analyze_unsuccessful_calls(lead, result, call_stats, dry_run)
             else:
                 # For other statuses, use AI analysis
-                result = self._analyze_with_ai(lead, result, dry_run)
+                result = self._analyze_with_ai(lead, result, call_stats, dry_run)
 
             result.mark_completed()
             return result
@@ -214,21 +218,11 @@ class LeadAnalyzerService(LoggerMixin):
             result.set_error(str(e))
             return result
 
-
-    def _analyze_unsuccessful_calls(self, lead: Lead, result: LeadAnalysisResult, dry_run: bool) -> LeadAnalysisResult:
+    def _analyze_unsuccessful_calls(self, lead: Lead, result: LeadAnalysisResult,
+                                  call_stats: Dict[str, Any], dry_run: bool) -> LeadAnalysisResult:
         """Analyze lead with status 158 (5 marta javob bermadi)"""
         try:
-            # Get lead activities
-            activities = self.bitrix_service.get_lead_activities(lead.id)
-            lead.activities = activities
-            print("Activities for lead:", lead.id, "->", len(activities), "activities found")
-            print("Lead activities:", activities)
-            print(lead.__dict__)
-            for activity in activities:
-                print("Activity:", activity.__dict__)
-
-            # Count unsuccessful calls
-            unsuccessful_calls = lead.unsuccessful_calls_count
+            unsuccessful_calls = call_stats['unsuccessful_calls']
             result.unsuccessful_calls_count = unsuccessful_calls
 
             self.log_lead_action(lead.id, "call_analysis", f"Found {unsuccessful_calls} unsuccessful calls")
@@ -243,8 +237,7 @@ class LeadAnalyzerService(LoggerMixin):
                 result.set_action(
                     AnalysisAction.CHANGE_STATUS,
                     AnalysisReason.INSUFFICIENT_CALLS,
-                    # new_status=new_status,
-                    new_status="JUNK",
+                    new_status=new_status,
                     new_junk_status=None
                 )
 
@@ -262,11 +255,12 @@ class LeadAnalyzerService(LoggerMixin):
             result.set_error(f"Error analyzing unsuccessful calls: {e}")
             return result
 
-    def _analyze_with_ai(self, lead: Lead, result: LeadAnalysisResult, dry_run: bool) -> LeadAnalysisResult:
+    def _analyze_with_ai(self, lead: Lead, result: LeadAnalysisResult,
+                        call_stats: Dict[str, Any], dry_run: bool) -> LeadAnalysisResult:
         """Analyze lead using AI transcription analysis"""
         try:
-            # Get audio files for the lead
-            audio_files = self.bitrix_service.get_lead_audio_files(lead.id)
+            # Get audio files from call statistics
+            audio_files = call_stats['audio_files']
 
             if not audio_files:
                 result.set_action(AnalysisAction.SKIP, AnalysisReason.NO_AUDIO_FILES)
@@ -401,6 +395,15 @@ class LeadAnalyzerService(LoggerMixin):
             except Exception as e:
                 self.logger.error(f"Junk leads query test failed: {e}")
                 return False
+
+            # Test Voximplant connection with a test lead
+            if leads:
+                try:
+                    test_lead_id = leads[0].id
+                    call_stats = self.bitrix_service.get_lead_call_statistics(test_lead_id)
+                    self.logger.info(f"Voximplant test: found {call_stats['total_calls']} calls for lead {test_lead_id}")
+                except Exception as e:
+                    self.logger.warning(f"Could not test Voximplant connection: {e}")
 
             # Test transcription service with dummy data (if supported)
             try:

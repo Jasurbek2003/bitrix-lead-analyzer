@@ -1,5 +1,5 @@
 """
-Bitrix24 API service for lead management
+Bitrix24 API service for lead management with Voximplant integration
 """
 import logging
 
@@ -69,7 +69,6 @@ class BitrixService(LoggerMixin):
     def get_leads(self, lead_filter: LeadFilter) -> List[Lead]:
         """Get leads based on filter criteria"""
         try:
-            print("Fetching leads with params:", )
             filter_params = lead_filter.to_bitrix_filter(self.lead_config.junk_status_field)
 
             params = {
@@ -81,7 +80,6 @@ class BitrixService(LoggerMixin):
                 'start': 0,
                 'rows': lead_filter.limit
             }
-            print("Fetching leads with params:", params)
 
             self.log_service_action("BitrixService", "get_leads", f"Fetching leads with filter: {filter_params}")
 
@@ -133,84 +131,110 @@ class BitrixService(LoggerMixin):
             self.log_lead_action(lead_id, "get_lead", f"Error fetching lead: {e}")
             raise
 
-    def get_data_from_voximplant(self, lead_id):
-        if not validate_lead_id(lead_id):
-            raise ValidationError(f"Invalid lead ID: {lead_id}")
-
-        task = {"filter": {"CRM_ENTITY_ID": lead_id}, "sort": "ID", "order": "DESC"}
-        # data = bx24.call(f"voximplant.statistic.get?start={start}", [task])
-        data = self._make_request("voximplant.statistic.get", task, method="GET").get('result', [])
-        print("Fetching data from voximplant.statistic.get")
-        print(data)
-        return data
-
-    def get_lead_activities(self, lead_id: str) -> List[LeadActivity]:
-        """Get activities for a specific lead"""
+    def get_voximplant_call_data(self, lead_id: str) -> List[Dict[str, Any]]:
+        """Get call records from Voximplant for a specific lead"""
         if not validate_lead_id(lead_id):
             raise ValidationError(f"Invalid lead ID: {lead_id}")
 
         try:
             params = {
-                'filter': {
-                    'OWNER_ID': lead_id,
-                    'OWNER_TYPE_ID': 1  # Lead type
-                },
-                # 'select': ['ID', 'TYPE_ID', 'DIRECTION', 'RESULT', 'DESCRIPTION', 'DATE', 'FILES']
+                "filter": {"CRM_ENTITY_ID": lead_id},
             }
 
-            self.log_lead_action(lead_id, "get_activities", "Fetching lead activities")
+            self.log_lead_action(lead_id, "get_voximplant_calls", "Fetching call records from Voximplant")
 
-            result = self._make_request("crm.activity.list.json", params)
-            activities_data = result.get('result', [])
+            result = self._make_request("voximplant.statistic.get", params, method="POST")
+            call_data = result.get('result', [])
 
-            activities = []
-            for activity_data in activities_data:
-                try:
-                    # Parse date
-                    date = None
-                    if activity_data.get('DATE'):
-                        try:
-                            date = datetime.fromisoformat(activity_data['DATE'].replace('Z', '+00:00'))
-                        except ValueError:
-                            pass
-
-                    # Extract audio file if available
-                    audio_file = None
-                    files = activity_data.get('FILES', [])
-                    if files:
-                        for file_info in files:
-                            if isinstance(file_info, dict) and file_info.get('url', '').startswith('https://'):
-                                audio_file = file_info.get('url') or file_info.get('path')
-                                audio_id = file_info.get('id')
-                                print("Fetching audio file", audio_id)
-                                if audio_id:
-                                    audio_file = f"{self.config.webhook_url}crm.file.get?ID={audio_id}"
-                                else:
-                                    self.logger.warning(f"Audio file ID not found in activity {activity_data.get('ID', 'unknown')}")
-                                print("Fetching audio file", audio_file)
-                                break
-
-                    activity = LeadActivity(
-                        id=str(activity_data['ID']),
-                        type_id=str(activity_data.get('TYPE_ID', '')),
-                        direction=str(activity_data.get('DIRECTION', '')),
-                        result=activity_data.get('RESULT'),
-                        description=activity_data.get('DESCRIPTION'),
-                        date=date,
-                        audio_file=audio_file
-                    )
-
-                    activities.append(activity)
-
-                except Exception as e:
-                    self.logger.warning(f"Failed to parse activity {activity_data.get('ID', 'unknown')}: {e}")
-
-            self.log_lead_action(lead_id, "get_activities", f"Successfully fetched {len(activities)} activities")
-            return activities
+            self.log_lead_action(lead_id, "get_voximplant_calls", f"Found {len(call_data)} call records")
+            return call_data
 
         except Exception as e:
-            self.log_lead_action(lead_id, "get_activities", f"Error fetching activities: {e}")
+            self.log_lead_action(lead_id, "get_voximplant_calls", f"Error fetching call data: {e}")
             raise
+
+    def get_lead_call_statistics(self, lead_id: str) -> Dict[str, Any]:
+        """Get call statistics for a lead including unsuccessful calls count"""
+        call_data = self.get_voximplant_call_data(lead_id)
+
+        total_calls = len(call_data)
+        unsuccessful_calls = 0
+        audio_files = []
+
+        for call in call_data:
+            # Check if call was unsuccessful
+            # Common unsuccessful statuses in Voximplant: 'FAILED', 'BUSY', 'NO_ANSWER', 'CANCEL'
+            call_result = call.get('CALL_RESULT', '').upper()
+            call_status = call.get('CALL_STATUS', '').upper()
+
+            if (call_result in ['FAILED', 'BUSY', 'NO_ANSWER', 'CANCEL'] or
+                call_status in ['FAILED', 'BUSY', 'NO_ANSWER', 'CANCEL'] or
+                call.get('CALL_DURATION', 0) == 0):
+                unsuccessful_calls += 1
+
+            # Extract audio file URL if available
+            if call.get('RECORD_URL'):
+                audio_files.append(call.get('RECORD_URL'))
+            elif call.get('RECORD_FILE_ID'):
+                # Build audio file URL from file ID
+                file_id = call.get('RECORD_FILE_ID')
+                audio_url = f"{self.config.webhook_url}/disk.file.get?ID={file_id}"
+                audio_files.append(audio_url)
+
+        return {
+            'total_calls': total_calls,
+            'unsuccessful_calls': unsuccessful_calls,
+            'has_calls': total_calls > 0,
+            'audio_files': audio_files,
+            'call_data': call_data
+        }
+
+    def get_lead_activities(self, lead_id: str) -> List[LeadActivity]:
+        """Get activities for a specific lead (deprecated, use get_lead_call_statistics instead)"""
+        # Keep this method for backward compatibility but use Voximplant data
+        call_stats = self.get_lead_call_statistics(lead_id)
+        activities = []
+
+        for i, call in enumerate(call_stats['call_data']):
+            # Parse date
+            date = None
+            if call.get('CALL_START_DATE'):
+                try:
+                    date = datetime.fromisoformat(call['CALL_START_DATE'].replace('Z', '+00:00'))
+                except ValueError:
+                    pass
+
+            # Determine if call was unsuccessful
+            call_result = call.get('CALL_RESULT', '').upper()
+            call_status = call.get('CALL_STATUS', '').upper()
+
+            result = 'SUCCESSFUL'
+            if (call_result in ['FAILED', 'BUSY', 'NO_ANSWER', 'CANCEL'] or
+                call_status in ['FAILED', 'BUSY', 'NO_ANSWER', 'CANCEL'] or
+                call.get('CALL_DURATION', 0) == 0):
+                result = 'UNSUCCESSFUL'
+
+            # Get audio file
+            audio_file = None
+            if call.get('RECORD_URL'):
+                audio_file = call.get('RECORD_URL')
+            elif call.get('RECORD_FILE_ID'):
+                file_id = call.get('RECORD_FILE_ID')
+                audio_file = f"{self.config.webhook_url}/disk.file.get?ID={file_id}"
+
+            activity = LeadActivity(
+                id=str(call.get('ID', i)),
+                type_id="2",  # Call type
+                direction=call.get('CALL_TYPE', 'OUTGOING'),
+                result=result,
+                description=f"Call duration: {call.get('CALL_DURATION', 0)}s",
+                date=date,
+                audio_file=audio_file
+            )
+
+            activities.append(activity)
+
+        return activities
 
     def update_lead_status(self, lead_id: str, new_status: str) -> bool:
         """Update lead main status"""
@@ -367,18 +391,12 @@ class BitrixService(LoggerMixin):
             return 0
 
     def get_lead_audio_files(self, lead_id: str) -> List[str]:
-        """Get audio files associated with a lead"""
+        """Get audio files associated with a lead from Voximplant"""
         if not validate_lead_id(lead_id):
             raise ValidationError(f"Invalid lead ID: {lead_id}")
 
-        # activities = self.get_lead_activities(lead_id)
-        activities = self.get_data_from_voximplant(lead_id)
-        audio_files = []
-        print(audio_files, "activities:", activities)
-
-        for activity in activities:
-            if activity.audio_file:
-                audio_files.append(activity.audio_file)
+        call_stats = self.get_lead_call_statistics(lead_id)
+        audio_files = call_stats['audio_files']
 
         self.log_lead_action(lead_id, "get_audio_files", f"Found {len(audio_files)} audio files")
         return audio_files
