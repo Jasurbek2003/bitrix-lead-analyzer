@@ -9,10 +9,10 @@ from typing import List, Dict, Any, Optional
 
 from app.config import get_config
 from app.logger import LoggerMixin
-from app.models.lead import Lead, LeadFilter, LeadBatch
+from app.models.lead import Lead, LeadFilter
 from app.models.analysis_result import (
     LeadAnalysisResult, BatchAnalysisResult, AnalysisAction, AnalysisReason,
-    TranscriptionResult, AIAnalysisResult
+    TranscriptionResult
 )
 from app.services.bitrix_service import BitrixService
 from app.services.transcription_service import TranscriptionService

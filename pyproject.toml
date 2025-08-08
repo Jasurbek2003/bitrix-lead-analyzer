@@ -15,5 +15,6 @@ dependencies = [
     "requests>=2.32.4",
     "schedule>=1.2.2",
     "speechrecognition>=3.14.3",
+    "sqlalchemy>=2.0.42",
     "uvicorn>=0.35.0",
 ]
