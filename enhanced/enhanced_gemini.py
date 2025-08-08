@@ -45,7 +45,6 @@ class EnhancedGeminiService(LoggerMixin):
 
             # Validate junk status
             valid_statuses = {
-                158: "5 marta javob bermadi",
                 227: "Notog'ri raqam",
                 229: "Ariza qoldirmagan",
                 783: "Notog'ri mijoz",
@@ -87,16 +86,25 @@ class EnhancedGeminiService(LoggerMixin):
 
             # Parse response with enhanced logic
             result_text = response.text.strip()
-            is_suitable, reasoning = self._parse_enhanced_response(result_text)
+            is_suitable, reasoning, alternative_status = self._parse_enhanced_response(result_text)
 
             self.logger.info(f"Enhanced Gemini analysis completed in {processing_time:.2f}s: suitable={is_suitable}")
 
-            return AIAnalysisResult(
+            if alternative_status:
+                self.logger.info(f"Alternative status suggested: {alternative_status}")
+
+            # Create extended result with alternative status info
+            result = AIAnalysisResult(
                 is_suitable=is_suitable,
                 reasoning=reasoning,
                 model_used=self.config.model_name,
                 processing_time=processing_time
             )
+
+            # Add alternative status to result (you might need to extend AIAnalysisResult class)
+            result.alternative_status = alternative_status
+
+            return result
 
         except Exception as e:
             self.logger.error(f"Error in Enhanced Gemini analysis: {e}")
@@ -106,7 +114,18 @@ class EnhancedGeminiService(LoggerMixin):
             )
 
     def _build_enhanced_analysis_prompt(self, transcription: str, junk_status: int, status_name: str) -> str:
-        """Build enhanced analysis prompt based on specific junk status with detailed reasoning"""
+        """Build enhanced analysis prompt that checks current status and suggests alternative if unsuitable"""
+
+        # Define all available junk statuses
+        all_junk_statuses = {
+            227: "Notog'ri raqam",
+            229: "Ariza qoldirmagan",
+            783: "Notog'ri mijoz",
+            807: "Yoshi to'g'ri kelmadi"
+        }
+
+        # Get other possible statuses (excluding current one)
+        other_statuses = {k: v for k, v in all_junk_statuses.items() if k != junk_status}
 
         # Base context about the system
         base_context = f"""
@@ -117,7 +136,19 @@ HOZIRGI HOLAT: "{status_name}" (Kod: {junk_status})
 QO'NG'IROQ YOZUVI:
 {transcription}
 
+BARCHA JUNK HOLATLARI:
 """
+
+        # Add all status definitions
+        for code, name in all_junk_statuses.items():
+            if code == 227:
+                base_context += f"- {code}: \"{name}\" - Telefon raqami noto'g'ri yoki boshqa kishiga tegishli\n"
+            elif code == 229:
+                base_context += f"- {code}: \"{name}\" - Mijoz hech qachon ariza bermagan\n"
+            elif code == 783:
+                base_context += f"- {code}: \"{name}\" - Mijoz xizmat uchun mos kelmaydi\n"
+            elif code == 807:
+                base_context += f"- {code}: \"{name}\" - Mijoz yoshi talablarga javob bermaydi\n"
 
         # Status-specific instructions
         if junk_status == 227:  # "Notog'ri raqam"
@@ -130,11 +161,10 @@ VAZIFA: Bu qo'ng'iroq yozuviga asoslanib, "Notog'ri raqam" holati to'g'ri yoki n
 - Mijoz "men bu xizmatga yozilmaganman" yoki "noto'g'ri raqam" desa
 - Qo'ng'iroq qabul qilgan kishi hech narsa bilmasa
 
-"Notog'ri raqam" holati QO'LLANILMASLIGI KERAK agar:
-- Mijoz xizmat haqida bilsa va qiziqsa
-- Mijoz oldin ariza berganini tasdiqlasa
-- Mijoz xizmatdan foydalanmoqchi bo'lsa
-- Mijoz savollar bersa va javoblarni kutsa
+LEKIN AGAR "Notog'ri raqam" mos kelmasa, boshqa holatlarga tekshiring:
+- Agar mijoz "men ariza bermaganman" desa → 229 "Ariza qoldirmagan" mos keladi
+- Agar mijoz yoshi kichik bo'lsa → 807 "Yoshi to'g'ri kelmadi" mos keladi  
+- Agar mijoz xizmat uchun mos kelmasa → 783 "Notog'ri mijoz" mos keladi
 """
 
         elif junk_status == 229:  # "Ariza qoldirmagan"
@@ -147,11 +177,10 @@ VAZIFA: Bu qo'ng'iroq yozuviga asoslanib, "Ariza qoldirmagan" holati to'g'ri yok
 - Mijoz "men bunday narsaga yozilmaganman" desa
 - Mijoz umuman qiziqmasa va rad etsa
 
-"Ariza qoldirmagan" holati QO'LLANILMASLIGI KERAK agar:
-- Mijoz ariza berganini tasdiqlasa
-- Mijoz xizmat haqida bilsa
-- Mijoz qiziqsa va savollar bersa
-- Mijoz keyinroq aloqaga chiqishni xohlasa
+LEKIN AGAR "Ariza qoldirmagan" mos kelmasa, boshqa holatlarga tekshiring:
+- Agar telefon noto'g'ri bo'lsa → 227 "Notog'ri raqam" mos keladi
+- Agar mijoz yoshi kichik bo'lsa → 807 "Yoshi to'g'ri kelmadi" mos keladi
+- Agar mijoz xizmat uchun mos kelmasa → 783 "Notog'ri mijoz" mos keladi
 """
 
         elif junk_status == 783:  # "Notog'ri mijoz"
@@ -164,11 +193,10 @@ VAZIFA: Bu qo'ng'iroq yozuviga asoslanib, "Notog'ri mijoz" holati to'g'ri yoki n
 - Mijoz talablarga javob bermasa
 - Mijoz umuman boshqa xizmat kerak ekanini aytsa
 
-"Notog'ri mijoz" holati QO'LLANILMASLIGI KERAK agar:
-- Mijoz xizmat uchun mos kelsa
-- Mijoz qiziqsa va mos talablarga javob bersa
-- Mijoz to'g'ri hududda yashasa
-- Mijoz xizmatni xohlasa
+LEKIN AGAR "Notog'ri mijoz" mos kelmasa, boshqa holatlarga tekshiring:
+- Agar telefon noto'g'ri bo'lsa → 227 "Notog'ri raqam" mos keladi
+- Agar mijoz ariza bermagan bo'lsa → 229 "Ariza qoldirmagan" mos keladi
+- Agar mijoz yoshi kichik bo'lsa → 807 "Yoshi to'g'ri kelmadi" mos keladi
 """
 
         elif junk_status == 807:  # "Yoshi to'g'ri kelmadi"
@@ -176,14 +204,14 @@ VAZIFA: Bu qo'ng'iroq yozuviga asoslanib, "Notog'ri mijoz" holati to'g'ri yoki n
 VAZIFA: Bu qo'ng'iroq yozuviga asoslanib, "Yoshi to'g'ri kelmadi" holati to'g'ri yoki noto'g'ri ekanligini aniqlang.
 
 "Yoshi to'g'ri kelmadi" holati QO'LLANILISHI KERAK agar:
-- Mijoz yoshi xizmat uchun kichik(16 yoshdan kichik) bo'lsa
+- Mijoz yoshi xizmat uchun kichik (16 yoshdan kichik) bo'lsa
 - Mijoz yosh chegarasiga to'g'ri kelmasligini aytsa
 - Operator yosh talabi haqida eslatsa va mijoz mos kelmasligini aytsa
 
-"Yoshi to'g'ri kelmadi" holati QO'LLANILMASLIGI KERAK agar:
-- Mijoz yoshi mos kelsa
-- Yosh haqida gaplar bo'lmasa
-- Mijoz boshqa sabablar tufayli rad etsa
+LEKIN AGAR "Yoshi to'g'ri kelmadi" mos kelmasa, boshqa holatlarga tekshiring:
+- Agar telefon noto'g'ri bo'lsa → 227 "Notog'ri raqam" mos keladi
+- Agar mijoz ariza bermagan bo'lsa → 229 "Ariza qoldirmagan" mos keladi
+- Agar mijoz boshqa sababdan mos kelmasa → 783 "Notog'ri mijoz" mos keladi
 """
 
         else:  # Default for other statuses
@@ -193,16 +221,18 @@ VAZIFA: Bu qo'ng'iroq yozuviga asoslanib, "{status_name}" holati to'g'ri yoki no
 Qo'ng'iroq mazmuniga asoslanib, hozirgi holat mijozning haqiqiy ahvoliga mos keladimi yoki yo'qmi deb baholang.
 """
 
-        # Enhanced final instructions with detailed reasoning request
+        # Enhanced final instructions with alternative status checking
         final_instructions = """
 JAVOB FORMATI:
 Javobingizni quyidagi formatda bering:
 
 QAROR: [true yoki false]
 
+ALTERNATIVE_STATUS: [agar hozirgi holat mos kelmasa, boshqa mos holatni yozing, masalan: 227, 229, 783, 807]
+
 SABABLARI:
 - [Birinchi sabab]
-- [Ikkinchi sabab]
+- [Ikkinchi sabab] 
 - [Uchinchi sabab]
 - [To'rtinchi sabab (agar kerak bo'lsa)]
 
@@ -212,22 +242,27 @@ TUSHUNTIRISH:
 QOIDALAR:
 - "true" = hozirgi holat to'g'ri va saqlanishi kerak
 - "false" = hozirgi holat noto'g'ri va o'zgartirilishi kerak
-- Faqat qo'ng'iroq yozuviga asoslanib javob bering
+- Agar hozirgi holat mos kelmasa, lekin boshqa junk holati mos kelsa, "true" deb javob bering va ALTERNATIVE_STATUS ni ko'rsating
+- Faqat mijoz haqiqatan ham NEW holatga o'tishi kerak bo'lsagina "false" deb javob bering
 - Shubha bo'lsa, "true" deb javob bering
-- Mijoz qiziqsa yoki savol bersa, odatda "false" deb javob bering
-- Mijoz rad etsa yoki mos kelmasa, "true" deb javob bering
+- ALTERNATIVE_STATUS faqat boshqa junk holati mos kelganda yozing
 - Har bir sababni aniq va qisqa yozing
 - Sabablar qo'ng'iroq yozuviga asoslangan bo'lishi kerak
+
+MUHIM:
+- Agar mijoz haqiqatan ham qiziqsa va hech qanday junk sabab bo'lmasa, faqat o'shanda "false" qaytaring
+- Agar biror junk sabab mavjud bo'lsa (hatto hozirgi holatdan farqli bo'lsa ham), "true" qaytaring va to'g'ri ALTERNATIVE_STATUS ni belgilang
 """
 
-        return base_context + specific_prompt + final_instructions
+        return base_context + "\n" + specific_prompt + "\n" + final_instructions
 
-    def _parse_enhanced_response(self, response_text: str) -> tuple[bool, Optional[str]]:
-        """Parse enhanced AI response to extract decision and detailed reasoning in bullet points"""
+    def _parse_enhanced_response(self, response_text: str) -> tuple[bool, Optional[str], Optional[int]]:
+        """Parse enhanced AI response to extract decision, reasoning, and alternative status"""
         lines = response_text.strip().split('\n')
 
         # Initialize variables
         is_suitable = None
+        alternative_status = None
         decision_reasons = []
         explanation = ""
         current_section = None
@@ -251,6 +286,19 @@ QOIDALAR:
                     is_suitable = False
                 current_section = 'decision'
 
+            elif line_lower.startswith('alternative_status:') or line_lower.startswith('alternative:'):
+                # Extract alternative status code
+                status_part = line_stripped.split(':', 1)[1].strip()
+                # Look for numeric status code
+                import re
+                numbers = re.findall(r'\b(227|229|783|807)\b', status_part)
+                if numbers:
+                    try:
+                        alternative_status = int(numbers[0])
+                    except ValueError:
+                        pass
+                current_section = 'alternative'
+
             elif line_lower.startswith('sabablari:') or line_lower.startswith('reasons:'):
                 current_section = 'reasons'
 
@@ -266,7 +314,7 @@ QOIDALAR:
                         decision_reasons.append(reason)
 
             elif current_section == 'explanation':
-                if not line_lower.startswith('qaror:') and not line_lower.startswith('sabablari:'):
+                if not any(line_lower.startswith(prefix) for prefix in ['qaror:', 'sabablari:', 'alternative_status:']):
                     explanation += line_stripped + " "
 
             # Fallback: look for standalone true/false
@@ -291,7 +339,7 @@ QOIDALAR:
         detailed_reasoning = ""
 
         if not is_suitable and decision_reasons:
-            # Format reasons as bullet points
+            # Status is not suitable and no alternative suggested
             detailed_reasoning = "Holat noto'g'ri deb topilgan sabablari:\n"
             for i, reason in enumerate(decision_reasons, 1):
                 detailed_reasoning += f"• {reason}\n"
@@ -299,21 +347,39 @@ QOIDALAR:
             if explanation.strip():
                 detailed_reasoning += f"\nQo'shimcha tushuntirish: {explanation.strip()}"
 
-        elif not is_suitable and not decision_reasons:
-            # No specific reasons provided, create a generic explanation
-            detailed_reasoning = "Holat noto'g'ri deb topildi, lekin batafsil sabab ko'rsatilmagan."
+        elif is_suitable and alternative_status and decision_reasons:
+            # Current status not suitable but alternative found
+            status_names = {
+                227: "Notog'ri raqam",
+                229: "Ariza qoldirmagan",
+                783: "Notog'ri mijoz",
+                807: "Yoshi to'g'ri kelmadi"
+            }
+            alt_status_name = status_names.get(alternative_status, f"Status {alternative_status}")
 
-        elif is_suitable and (decision_reasons or explanation.strip()):
-            # Status is suitable, but we have some reasoning
-            detailed_reasoning = "Holat to'g'ri deb tasdiqlandi."
-            if decision_reasons:
-                detailed_reasoning += "\nTasdiqlovchi dalillar:\n"
-                for reason in decision_reasons:
-                    detailed_reasoning += f"• {reason}\n"
+            detailed_reasoning = f"Hozirgi holat o'rniga '{alt_status_name}' ({alternative_status}) holati ko'proq mos keladi.\n"
+            detailed_reasoning += "Sabablari:\n"
+            for i, reason in enumerate(decision_reasons, 1):
+                detailed_reasoning += f"• {reason}\n"
+
             if explanation.strip():
                 detailed_reasoning += f"\nTushuntirish: {explanation.strip()}"
 
-        return is_suitable, detailed_reasoning if detailed_reasoning else None
+        elif is_suitable and decision_reasons:
+            # Status is suitable
+            detailed_reasoning = "Holat to'g'ri deb tasdiqlandi.\n"
+            detailed_reasoning += "Tasdiqlovchi dalillar:\n"
+            for reason in decision_reasons:
+                detailed_reasoning += f"• {reason}\n"
+
+            if explanation.strip():
+                detailed_reasoning += f"\nTushuntirish: {explanation.strip()}"
+
+        elif not is_suitable and not decision_reasons:
+            # No specific reasons provided
+            detailed_reasoning = "Holat noto'g'ri deb topildi, lekin batafsil sabab ko'rsatilmagan."
+
+        return is_suitable, detailed_reasoning if detailed_reasoning else None, alternative_status
 
     def analyze_batch_leads(self, lead_transcriptions: List[Dict]) -> List[AIAnalysisResult]:
         """Analyze multiple leads in batch with rate limiting"""

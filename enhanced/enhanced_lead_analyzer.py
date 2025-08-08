@@ -266,11 +266,10 @@ class EnhancedLeadAnalyzerService(LoggerMixin):
 
     def _analyze_with_ai_transcription(self, lead: Lead, result: LeadAnalysisResult,
                                        dry_run: bool) -> LeadAnalysisResult:
-        """Analyze lead using AI with enhanced transcription"""
+        """Analyze lead using AI with enhanced transcription and alternative status checking"""
         try:
             # Get audio files from Voximplant
             voximplant_data = self.bitrix_service.get_voximplant_call_data(lead.id)
-            print(voximplant_data, "Voximplant data for lead")
 
             audio_files = []
             for call_data in voximplant_data:
@@ -336,18 +335,51 @@ class EnhancedLeadAnalyzerService(LoggerMixin):
                 result.set_error(f"AI analysis failed: {ai_result.error}")
                 return result
 
-            # Make decision based on AI result
+            # Enhanced decision logic with alternative status handling
             if ai_result.is_suitable:
-                # Keep current junk status - AI says it's suitable
-                result.set_action(AnalysisAction.KEEP_STATUS, AnalysisReason.AI_SUITABLE)
-                self.log_lead_action(lead.id, "decision", "Keeping status - AI says suitable")
+                if ai_result.has_alternative_status:
+                    # Current status not suitable, but alternative status is suitable
+                    alternative_status = ai_result.alternative_status
+                    alternative_name = self.junk_statuses.get(alternative_status, f"Status {alternative_status}")
 
-                # Log AI reasoning if available
-                if ai_result.reasoning:
-                    self.log_lead_action(lead.id, "ai_reasoning", f"AI Decision Details:\n{ai_result.reasoning}")
+                    result.set_action(
+                        AnalysisAction.CHANGE_STATUS,
+                        AnalysisReason.AI_NOT_SUITABLE,
+                        new_status=self.config.lead_status.junk_status_value,  # Keep as JUNK
+                        new_junk_status=alternative_status  # Change to alternative status
+                    )
+
+                    self.log_lead_action(
+                        lead.id,
+                        "decision",
+                        f"Changing junk status from {lead.junk_status} to {alternative_status} ({alternative_name})"
+                    )
+
+                    # Log AI reasoning
+                    if ai_result.reasoning:
+                        self.log_lead_action(lead.id, "ai_reasoning", f"AI Decision Details:\n{ai_result.reasoning}")
+
+                    # Update lead status if not dry run
+                    if not dry_run:
+                        # Update both main status (keep as JUNK) and junk status (change to alternative)
+                        success = self.bitrix_service.update_lead_complete(
+                            lead.id,
+                            self.config.lead_status.junk_status_value,  # Keep as JUNK
+                            alternative_status  # New junk status
+                        )
+                        if not success:
+                            result.set_error("Failed to update lead status")
+                else:
+                    # Keep current junk status - AI says it's suitable
+                    result.set_action(AnalysisAction.KEEP_STATUS, AnalysisReason.AI_SUITABLE)
+                    self.log_lead_action(lead.id, "decision", "Keeping status - AI says suitable")
+
+                    # Log AI reasoning if available
+                    if ai_result.reasoning:
+                        self.log_lead_action(lead.id, "ai_reasoning", f"AI Decision Details:\n{ai_result.reasoning}")
 
             else:
-                # Change to active status - AI says it's not suitable
+                # Change to active status - AI says lead is not junk at all
                 new_status = self.config.lead_status.active_status_value
                 result.set_action(
                     AnalysisAction.CHANGE_STATUS,
@@ -356,24 +388,28 @@ class EnhancedLeadAnalyzerService(LoggerMixin):
                     new_junk_status=None
                 )
 
-                self.log_lead_action(lead.id, "decision", "Changing status - AI says not suitable")
+                self.log_lead_action(lead.id, "decision", "Changing status to NEW - AI says not junk")
 
                 # Log detailed reasoning for false results
                 if ai_result.reasoning:
                     self.log_lead_action(lead.id, "ai_reasoning", f"AI Decision Details:\n{ai_result.reasoning}")
                 else:
-                    self.log_lead_action(lead.id, "ai_reasoning",
-                                         "AI determined status is not suitable (no detailed reasoning provided)")
+                    self.log_lead_action(
+                        lead.id,
+                        "ai_reasoning",
+                        "AI determined lead should not be junk (no detailed reasoning provided)"
+                    )
 
                 # Update lead status if not dry run
                 if not dry_run:
                     success = self.bitrix_service.update_lead_complete(lead.id, new_status, None)
                     if not success:
                         result.set_error("Failed to update lead status")
+
             return result
 
         except Exception as e:
-            print("Error in AI analysis:", e)
+            self.logger.error(f"Error in AI analysis: {e}")
             result.set_error(f"Error in AI analysis: {e}")
             return result
 

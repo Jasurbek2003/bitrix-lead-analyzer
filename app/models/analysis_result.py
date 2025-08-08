@@ -43,18 +43,38 @@ class TranscriptionResult:
 
 @dataclass
 class AIAnalysisResult:
-    """AI analysis result"""
+    """AI analysis result with alternative status support"""
     is_suitable: bool
     confidence: Optional[float] = None
     reasoning: Optional[str] = None
     model_used: Optional[str] = None
     processing_time: Optional[float] = None
     error: Optional[str] = None
+    alternative_status: Optional[int] = None  # New field for alternative junk status
 
     @property
     def is_successful(self) -> bool:
         """Check if AI analysis was successful"""
         return not self.error
+
+    @property
+    def has_alternative_status(self) -> bool:
+        """Check if an alternative status was suggested"""
+        return self.alternative_status is not None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert result to dictionary"""
+        return {
+            'is_suitable': self.is_suitable,
+            'confidence': self.confidence,
+            'reasoning': self.reasoning,
+            'model_used': self.model_used,
+            'processing_time': self.processing_time,
+            'error': self.error,
+            'alternative_status': self.alternative_status,
+            'is_successful': self.is_successful,
+            'has_alternative_status': self.has_alternative_status
+        }
 
 @dataclass
 class LeadAnalysisResult:
